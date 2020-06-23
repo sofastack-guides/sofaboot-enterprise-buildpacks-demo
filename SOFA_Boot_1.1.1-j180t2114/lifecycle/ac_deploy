@@ -1,0 +1,159 @@
+#!/usr/bin/env python
+#
+# Alipay.com Inc.
+
+__author__ = 'xuanhong'
+
+import sys
+import os
+
+local_path = os.path.dirname(os.path.realpath(__file__))
+parent_path = os.path.dirname(local_path)
+sys.path.append(parent_path)
+library_path = os.path.join(parent_path, 'resources')
+
+from xdeploy.util import function_util
+from xdeploy.base import base_executor
+from xdeploy.util import logutil
+from xdeploy.util import base_pubcore
+from resources.util import filterBuildpackParam
+
+
+FUNC_KEY = "func"
+CONTEXT_KEY = "context"
+VERSION_FILE_DIR = "/home/admin/release/"
+
+
+def process_pubcore(**kwargs):
+    function_util.change_user("admin")
+    global CONTEXT_KEY
+    try:
+        if(False == base_pubcore.base_pubcore(kwargs[CONTEXT_KEY])):
+            sys.exit(1)
+        else:
+            sys.exit(0)
+    except Exception, e:
+        logutil.LOG_ERROR(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                          "exception: \n%s" % e, prominent=False)
+        sys.exit(1)
+
+
+def process_flow_function(**kwargs):
+    global FUNC_KEY
+    global CONTEXT_KEY
+    try:
+        if(False == kwargs[FUNC_KEY](kwargs[CONTEXT_KEY])):
+            sys.exit(1)
+        else:
+            sys.exit(0)
+    except Exception, e:
+        logutil.LOG_ERROR(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                          "exception: \n%s" % e, prominent=False)
+        sys.exit(1)
+
+
+def deploy(context):
+    global library_path
+
+    # set /home/admin/logs/stdout.log to admin
+    stdOutLogFile = "/home/admin/logs/stdout.log"
+    if os.path.exists(stdOutLogFile) == True:
+        os.system("chown admin:admin " + stdOutLogFile)
+
+    stdErrLogFile = "/home/admin/logs/stderr.log"
+    if os.path.exists(stdErrLogFile) == True:
+        os.system("chown admin:admin " + stdErrLogFile)
+
+    # admin user
+    function_util.change_user("admin")
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "After change_user, current user is" + os.popen("id").read())
+
+    # shutdown
+    shutdown_command = "/bin/bash " + os.path.join(library_path, "stopApp.sh")
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(
+        sys._getframe().f_lineno), "begin to execute stopApp.sh")
+    os.system(shutdown_command)
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "finish to execute stopApp.sh")
+
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "After stopApp.sh, current user is" + os.popen("id").read())
+
+    extparams = ""
+    if("deploy_extparams" in context.params_dict):
+        extparams = context.params_dict["deploy_extparams"]
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "extparams are: " + extparams)
+
+    dynamic_params = ""
+    for key, value in context.params_dict.iteritems():
+        if (key.startswith("-D")):
+            if not value:
+                dynamic_params = dynamic_params + " " + key
+            else:
+                dynamic_params = dynamic_params + " " + key + "=" + value
+
+        elif (key.startswith("confregurl")):
+            dynamic_params = dynamic_params + " -C" + key + "=" + value
+
+    # log params
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "dynamic params: " + dynamic_params)
+
+    profile_param = ""
+    if "spring.profiles.active" in context.params_dict:
+        profile_param = "-E" + context.params_dict["spring.profiles.active"]
+
+    # deploy
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "Before deploy.sh, current user is" + os.popen("id").read())
+    script_name = os.path.join(library_path, "deploy.sh")
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "begin to execute deploy.sh")
+    command = "/bin/sh " + script_name + " " + extparams + " " + dynamic_params + " " + profile_param
+    print("deploy command is " + command)
+    (recode, stdout, stderr) = function_util.popen(command)
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "end to execute deploy.sh")
+
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "after deploy.sh, current user is" + os.popen("id").read())
+
+    # read from log file
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "SOFA Boot deploy.sh stdout:\n" + str(stdout))
+
+    if(recode == 0):
+        logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                         "/bin/sh deploy.sh success")
+    else:
+        logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                         "deploy.sh stdout info:" + str(stdout))
+        logutil.LOG_ERROR(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                          "/bin/sh deploy.sh failed. error info:\n" + str(stderr))
+
+
+def main():
+    global CONTEXT_KEY
+    ct = base_executor.Context()
+    ct.params_dict = filterBuildpackParam(sys.argv[1:])
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "after filterBuildpackParam context.params_dict is: %s" % ct.params_dict)
+
+    # type can be: publish, rollback, restart
+    # if type is restart, we don't need to call base_pubcore
+    if ct.params_dict["type"] == "publish" or ct.params_dict["type"] == "rollback":
+        if(function_util.process_wait(process_pubcore, kwargs={CONTEXT_KEY: ct})):
+            logutil.LOG_ERROR(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                              "call base_pubcore() return False\n", prominent=False)
+            sys.exit(1)
+
+    if(function_util.process_wait(process_flow_function, kwargs={FUNC_KEY: deploy, CONTEXT_KEY: ct})):
+        logutil.LOG_ERROR(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                          "SOFA Boot deploy() return False\n", prominent=False)
+        sys.exit(1)
+
+
+if(__name__ == '__main__'):
+    main()

@@ -1,0 +1,37 @@
+#!/usr/bin/env python
+#
+# Alipay.com Inc.
+
+__author__ = 'xuanhong'
+
+import os
+import sys
+
+from xdeploy.util import function_util
+from xdeploy.util import logutil
+
+local_path=os.path.dirname(os.path.realpath(__file__))
+parent_path=os.path.dirname(local_path)
+sys.path.append(parent_path)
+library_path=os.path.join(parent_path, 'resources')
+
+def main():
+    global library_path
+
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno),\
+		"start to shutdown sofa_lite2")
+    function_util.change_user("admin")
+
+    #shutdown
+    shutdown_command="/bin/bash "+os.path.join(library_path,"stopApp.sh")
+    os.system(shutdown_command)
+
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno),\
+		"Sofa_Boot has been shutdown")
+    return True
+
+if( __name__ == '__main__'):
+    if main() == True:
+        sys.exit(0)
+    else:
+        sys.exit(1)

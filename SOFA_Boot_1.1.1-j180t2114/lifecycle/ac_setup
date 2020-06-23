@@ -1,0 +1,229 @@
+#!/usr/bin/env python
+#
+# Alipay.com Inc.
+
+__author__ = 'xuanhong'
+
+import sys
+import os
+import json
+
+local_path=os.path.dirname(os.path.realpath(__file__))
+parent_path=os.path.dirname(local_path)
+sys.path.append(parent_path)
+
+from xdeploy.util import logutil
+from xdeploy.util import function_util
+from xdeploy.base import base_executor
+from resources.util import filterBuildpackParam
+
+DEPENDENCY_FILE_PATH="resources/"
+
+def simplify_dependency_name(name):
+    if name.find("cloudengine") > -1:
+        return "cloudengine"
+    elif name.find("cronolog") > -1:
+        return "cronolog"
+    elif name.find("jdk") > -1:
+        return "java"
+    elif name.find("tengine") > -1:
+        return "nginx"
+    else:
+        return name
+
+def create_ajdk_softlink_and_env(dependency_ajdk):
+    simple_name = simplify_dependency_name(dependency_ajdk)
+    softlink_name = "/opt/software/" + simple_name
+    # end with .rpm
+    dependency_name = dependency_ajdk[0:-4]
+    targetlink_name = "/opt/taobao/install/" + dependency_name
+    os.system("ln -s " + targetlink_name + " " + softlink_name)
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "create soft link for  %s" % targetlink_name)
+    write_env_to_file("JAVA_HOME", softlink_name)
+    write_env_to_file("PATH", "$JAVA_HOME/bin:$PATH")
+    write_env_to_file("CLASSPATH", ".:$JAVA_HOME/lib/dt.jar:$JAVA_HOME/lib/tools.jar")
+
+
+def write_env_to_file(key,value):
+    target_file = "/etc/profile"
+    find_same_key_f = open(target_file)
+    new_content = []
+    while 1:
+        line = find_same_key_f.readline()
+        if not line:
+            break;
+
+        if line.find("export") > -1 and line.find(" " + key) > -1:
+            logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "%s already stay in /etc/profile" % key)
+        else:
+            new_content.append(line)
+    find_same_key_f.close()
+    new_content.append("export " + key + "=" + value + "\n")
+    f = open(target_file, "w+")
+    for l in new_content:
+        f.write(l)
+    f.close()
+    #make new env effective
+    os.system("source " + target_file)
+
+
+def main():
+    global DEPENDENCY_FILE_PATH
+    global parent_path
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "%s start" % __file__)
+
+    ret,stdout,stderr=function_util.popen("cat /etc/redhat-release")
+    depend_path = ""
+    is_centos72_flag = False
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "Execute cat /etc/issue result: %s"%stdout)
+    # Alibaba Group Enterprise Linux Server release 6.2 (DogTag)
+    if stdout.find("Alibaba") > -1:
+        if stdout.find(" 6.") > -1:
+            depend_path = DEPENDENCY_FILE_PATH + "centos6.5"
+        elif stdout.find(" 7.") > -1:
+            is_centos72_flag = True
+            depend_path = DEPENDENCY_FILE_PATH + "centos7.2"
+        else:
+            logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "Unkown centos version: %s"%stdout)
+            sys.exit(1)
+    elif stdout.find("CentOS") > -1:
+        if stdout.find(" 6.") > -1:
+            depend_path = DEPENDENCY_FILE_PATH + "centos6.5"
+        elif stdout.find(" 7.") > -1:
+            is_centos72_flag = True
+            depend_path = DEPENDENCY_FILE_PATH + "centos7.2"
+        else:
+            logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "Unkown centos version: %s"%stdout)
+            sys.exit(1)
+    else:
+        logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "Unkown centos version: %s"%stdout)
+        sys.exit(1)
+
+    dependency_path = os.path.join(parent_path, depend_path)
+    dependency_list = os.listdir(dependency_path)
+    taobao_pack_install_path = "/opt/taobao/install/"
+    if is_centos72_flag == False:
+        os.system("rm -rf /opt/software/*")
+
+        for dependency in dependency_list:
+            if dependency.startswith("._"):
+                continue
+            if dependency.find(".rpm") > -1:
+                target_dependency_file = os.path.join(dependency_path, dependency)
+                logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "rpm -Uvh --force --nodeps start: %s" % dependency)
+                ret,stdout,stderr=function_util.popen("rpm -Uvh --force --nodeps %s  1>/dev/null 2>&1"%target_dependency_file)
+                if ret!=0:
+                    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "rpm -Uvh --force --nodeps error: %s" % dependency)
+                    sys.exit(1)
+                logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "rpm -Uvh --force --nodeps success: %s" % dependency)
+                
+                # ajdk
+                if dependency.find("ajdk") > -1:
+                    create_ajdk_softlink_and_env(dependency)
+                    
+            if dependency.find(".tgz") > -1 or dependency.find(".zip") > -1 :
+                full_file_path = os.path.join(dependency_path, dependency)
+
+                if dependency.find(".tgz") > -1:
+                    extract_tgz = os.system("tar -xf " + full_file_path + " -C /opt/software/install")
+                    if extract_tgz != 0:
+                        logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "error to extract tgz %s" % full_file_path)
+                        sys.exit(1)
+
+                logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "tar -xf %s to /opt/software/install" % full_file_path)
+                simple_name = simplify_dependency_name(dependency)
+                softlink_name = "/opt/software/" + simple_name
+                dependency_name = dependency[0:-4]
+                targetlink_name = "/opt/software/install/" + dependency_name
+                os.system("ln -s " + targetlink_name + " " + softlink_name)
+                logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "create soft link for  %s" % full_file_path)
+
+                #set env
+                if simple_name == "java":
+                    write_env_to_file("JAVA_HOME", softlink_name)
+                    write_env_to_file("PATH", "$JAVA_HOME/bin:$PATH")
+                    write_env_to_file("CLASSPATH", ".:$JAVA_HOME/lib/dt.jar:$JAVA_HOME/lib/tools.jar")
+                else:
+                    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "fail to set env for: %s" % dependency)
+    else:
+        os.system("rm -rf /opt/software/*")
+        logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "finish: rm -rf /opt/software/*")
+        create_install_path = os.system("mkdir -p /opt/software/install")
+        if create_install_path != 0:
+            logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "error to execute:mkdir -p /opt/software/install")
+            sys.exit(1)
+        
+        for dependency in dependency_list:
+            if dependency.startswith("._"):
+                continue
+            if dependency.find(".tgz") > -1 or dependency.find(".zip") > -1 :
+                full_file_path = os.path.join(dependency_path, dependency)
+
+                if dependency.find(".tgz") > -1:
+                    extract_tgz = os.system("tar -xf " + full_file_path + " -C /opt/software/install")
+                    if extract_tgz != 0:
+                        logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "error to extract tgz %s" % full_file_path)
+                        sys.exit(1)
+
+                logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "tar -xf %s to /opt/software/install" % full_file_path)
+                simple_name = simplify_dependency_name(dependency)
+                softlink_name = "/opt/software/" + simple_name
+                dependency_name = dependency[0:-4]
+                targetlink_name = "/opt/software/install/" + dependency_name
+                os.system("ln -s " + targetlink_name + " " + softlink_name)
+                logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "create soft link for  %s" % full_file_path)
+
+                #set env
+                if simple_name == "java":
+                    write_env_to_file("JAVA_HOME", softlink_name)
+                    write_env_to_file("PATH", "$JAVA_HOME/bin:$PATH")
+                    write_env_to_file("CLASSPATH", ".:$JAVA_HOME/lib/dt.jar:$JAVA_HOME/lib/tools.jar")
+                elif simple_name == "cronolog":
+                    write_env_to_file("CRONOLOG_HOME", softlink_name)
+                else:
+                    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "fail to set env for: %s" % dependency)
+
+            elif dependency.find(".rpm") > -1:
+                full_file_path = os.path.join(dependency_path, dependency)
+                ret,stdout,stderr=function_util.popen("rpm -Uvh --force --nodeps %s  1>/dev/null 2>&1"%full_file_path)
+
+                # ajdk
+                if dependency.find("ajdk") > -1:
+                    create_ajdk_softlink_and_env(dependency)
+
+                if os.path.isdir(taobao_pack_install_path):
+                    taobao_install_packages = os.listdir(taobao_pack_install_path)
+                    for pack in taobao_install_packages:
+                        if pack.find("tengine") > -1:
+                            taobao_tengine_path = os.path.join(taobao_pack_install_path, pack)
+                            simple_name = simplify_dependency_name(pack)
+                            softlink_name = "/opt/software/" + simple_name
+                            os.system("ln -s " + taobao_tengine_path + " " + softlink_name)
+                            logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "create soft link for tengine: %s" % taobao_tengine_path)
+                            if simple_name == "nginx":
+                                write_env_to_file("NGINX_HOME", softlink_name)
+                            else:
+                                logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "fail to set env for: %s" % dependency)
+                            break
+                        
+                else:
+                    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "%s not exist." % taobao_pack_install_path)
+            else:
+                logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "unsupported format for file: %s" % dependency)
+
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "rpm -Uvh --force --nodeps all success for SOFA Boot.")
+    
+    #workaround
+    # jmxPasswordFile = "/opt/software/install/jdk1.8.0_131-1/jre/lib/management/jmxremote.password"
+    # if os.path.exists(jmxPasswordFile) == False:
+    #     os.system("cp /opt/software/install/jdk1.8.0_131-1/jre/lib/management/jmxremote.password.template /opt/software/install/jdk1.8.0_131-1/jre/lib/management/jmxremote.password")
+    #     os.system("chmod 777 /opt/software/install/jdk1.8.0_131-1/jre/lib/management/jmxremote.password")
+
+    ct = base_executor.Context()
+    ct.params_dict = filterBuildpackParam(sys.argv[1:])
+    setup_json_parameter = ct.params_dict["setup_json_parameter"]
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "setup_json_parameter is %s" % setup_json_parameter)
+    
+    
+if( __name__ == '__main__'):
+    main()

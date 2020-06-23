@@ -1,0 +1,15 @@
+#!/usr/bin/env python
+#
+# Alipay.com Inc.
+
+__author__ = 'xuanhong'
+
+import sys
+
+from xdeploy.util import logutil
+
+def main():
+  logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), "ac_init_env for sofa_lite2 begin and finish")
+
+if( __name__ == '__main__'):
+    main()

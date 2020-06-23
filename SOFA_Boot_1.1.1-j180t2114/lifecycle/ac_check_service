@@ -1,0 +1,63 @@
+#!/usr/bin/env python
+#
+# Alipay.com Inc.
+
+__author__ = 'xuanhong'
+
+import os
+import sys
+
+from xdeploy.util import logutil
+from xdeploy.util import function_util
+from xdeploy.base import base_executor
+
+local_path=os.path.dirname(os.path.realpath(__file__))
+parent_path=os.path.dirname(local_path)
+sys.path.append(parent_path)
+library_path=os.path.join(parent_path,"resources")
+
+from resources.util import filterBuildpackParam
+
+def main():
+    global library_path
+    function_util.change_user("admin")
+    
+    ct = base_executor.Context()
+    ct.params_dict = filterBuildpackParam(sys.argv[1:])
+    
+    # check service
+    script_name=os.path.join(library_path,"check_service.sh")
+    command="/bin/sh " + script_name
+    if "ac.healthcheck.timeout" in ct.params_dict:
+        logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                         "Customize health check timeout: " + ct.params_dict["ac.healthcheck.timeout"])
+        command="/bin/sh " + script_name + " /home/admin/app-run " + ct.params_dict["ac.healthcheck.timeout"]
+
+    if "ac.healthcheck.port" in ct.params_dict:
+            logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                                     "Customize health check port: " + ct.params_dict["ac.healthcheck.port"])
+            command="export  HEALTH_CHECK_PORT=" + ct.params_dict["ac.healthcheck.port"] + " && " + command
+
+    (recode,stdout,stderr)=function_util.popen(command)
+
+    # read from log file
+    logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name, str(sys._getframe().f_lineno),
+                     "SOFA Boot check_service.sh stdout:\n" + str(stdout))
+
+    if(recode==0):
+        logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), \
+				 "/bin/sh check_service.sh success")
+        return True
+    else:
+        logutil.LOG_INFO(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), \
+				"check_service.sh stdout info : "+str(stdout))
+
+        logutil.LOG_ERROR(__file__, sys._getframe().f_code.co_name,str(sys._getframe().f_lineno), \
+                "/bin/sh check_service.sh failed. error info:\n"+str(stderr))
+        return False
+
+if( __name__ == '__main__'):
+    if main() == True:
+        sys.exit(0)
+    else:
+        sys.exit(1)
